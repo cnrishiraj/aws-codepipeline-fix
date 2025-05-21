@@ -1,0 +1,96 @@
+name: Python Error Fixer
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - '**.py'  # Only trigger on Python file changes
+  pull_request:
+    branches: [ dev ]
+    paths:
+      - '**.py'
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+env:
+  AWS_REGION: us-east-1
+  MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
+  DEBUG: 'true'
+
+jobs:
+  fix-python-errors:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Needed for git history
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Configure Git
+      run: |
+        git config --global user.name "cnrishiraj"
+        git config --global user.email "cnrishiraj@gmail.com"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install boto3 botocore
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Check commit message
+      id: check_commit
+      run: |
+        COMMIT_MSG=$(git log -1 --pretty=%B)
+        if [[ "$COMMIT_MSG" == *"Auto-fix"* ]] || [[ "$COMMIT_MSG" == *"auto-fix"* ]] || [[ "$COMMIT_MSG" == *"[skip-build]"* ]]; then
+          echo "Skipping for auto-fix commit"
+          echo "skip=true" >> $GITHUB_OUTPUT
+        else
+          echo "skip=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Fix Python errors
+      if: steps.check_commit.outputs.skip != 'true'
+      env:
+        DEBUG: 'true'
+        LOG_LEVEL: 'debug'
+      run: |
+        echo "Using AWS Region: $AWS_REGION"
+        echo "Using Model ID: $MODEL_ID"
+        echo "Debug mode: $DEBUG"
+        for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
+          if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/.venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
+            echo "Skipping $file (excluded directory)"
+            continue
+          fi
+          echo "Processing $file"
+          python fix_python_errors.py "$file" || {
+            echo "Error processing $file"
+            exit 1
+          }
+        done
+
+    - name: Commit and push fixes
+      if: steps.check_commit.outputs.skip != 'true'
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "Changes detected, committing fixes..."
+          git add .
+          git commit -m "Auto-fix: Python errors fixed [skip-build]"
+          git push origin HEAD:${GITHUB_REF#refs/heads/}
+        else
+          echo "No changes to commit"
+        fi
