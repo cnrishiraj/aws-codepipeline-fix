@@ -1,17 +1,28 @@
 version: 0.2
 
+env:
+  variables:
+    MODEL_ID: "anthropic.claude-3-sonnet-20240229-v1:0"
+    AWS_REGION: "us-east-1"
+
 phases:
   install:
     runtime-versions:
       python: 3.9
     commands:
+      - echo ">>> Installing system & Python dependencies"
+      - pip install --upgrade pip
       - pip install boto3 botocore
       - git config --global user.name "AWS CodeBuild"
       - git config --global user.email "codebuild@example.com"
 
   pre_build:
     commands:
-      - echo "Checking commit message to prevent build loops"
+      - echo ">>> Installing project requirements"
+      - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - echo ">>> Verifying AWS identity"
+      - aws sts get-caller-identity
+      - echo ">>> Checking commit message to prevent build loops"
       - |
         COMMIT_MSG=$(git log -1 --pretty=%B)
         if [[ "$COMMIT_MSG" == *"Auto-fix"* ]] || [[ "$COMMIT_MSG" == *"auto-fix"* ]] || [[ "$COMMIT_MSG" == *"[skip-build]"* ]]; then
@@ -21,7 +32,7 @@ phases:
 
   build:
     commands:
-      - echo "Checking Python files for errors..."
+      - echo ">>> Checking Python files for errors..."
       - |
         for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
           if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/.venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
@@ -29,26 +40,34 @@ phases:
             continue
           fi
           echo "Processing $file"
-          if ! python3 fix_python_errors.py "$file"; then
+          python3 fix_python_errors.py "$file" || {
             echo "Error processing $file"
             exit 1
-          fi
+          }
         done
 
   post_build:
     commands:
-      - echo "Python files have been checked and fixed"
+      - echo ">>> Build finished at $(date)"
       - |
         if [ -n "$(git status --porcelain)" ]; then
           echo "Changes detected, committing fixes..."
           git add .
           git commit -m "Auto-fix: Python errors fixed [skip-build]"
-          git push origin HEAD:dev || {
+          git push origin HEAD:${CODEBUILD_SOURCE_VERSION:-dev} || {
             echo "Failed to push changes. Fetching latest changes and retrying..."
             git fetch origin
-            git rebase origin/dev
-            git push origin HEAD:dev
+            git rebase origin/${CODEBUILD_SOURCE_VERSION:-dev}
+            git push origin HEAD:${CODEBUILD_SOURCE_VERSION:-dev}
           }
         else
           echo "No changes to commit"
-        fi 
+        fi
+
+artifacts:
+  files:
+    - "**/*.py"
+  exclude-paths:
+    - "**/__pycache__/**"
+    - "**/venv/**"
+    - "**/.venv/**" 
