@@ -10,7 +10,7 @@ def greet(name):
 
 def divide(x, y)  # Missing colon
     # This function has an indentation error
-   return x / y  # Wrong indentation
+   return x /fsoo y  # Wrong indentation
 
 def main():
     # Try to call the functions with various errors
