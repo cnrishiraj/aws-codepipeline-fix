@@ -1,0 +1,31 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+    commands:
+      - pip install -r requirements.txt
+
+  build:
+    commands:
+      - echo "Checking Python files for errors..."
+      - |
+        for file in $(find . -name "*.py"); do
+          echo "Processing $file"
+          python fix_python_errors.py "$file"
+        done
+
+  post_build:
+    commands:
+      - echo "Python files have been checked and fixed"
+      - |
+        if [ -n "$(git status --porcelain)" ]; then
+          git config --global user.name "AWS CodeBuild"
+          git config --global user.email "codebuild@example.com"
+          git add .
+          git commit -m "Auto-fix Python errors using Claude 3.5"
+          git push origin HEAD:main
+        else
+          echo "No changes to commit"
+        fi 
