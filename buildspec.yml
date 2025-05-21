@@ -6,8 +6,10 @@ phases:
       python: 3.9
     commands:
       - pip install boto3 botocore
+      - git config --global user.name "AWS CodeBuild"
+      - git config --global user.email "codebuild@example.com"
 
-  build:
+  pre_build:
     commands:
       - echo "Checking commit message to prevent build loops"
       - |
@@ -16,11 +18,18 @@ phases:
           echo "Skipping build for auto-fix commit"
           exit 0
         fi
+
+  build:
+    commands:
       - echo "Checking Python files for errors..."
       - |
-        for file in $(find . -name "*.py"); do
+        find . -name "*.py" | while read file; do
           echo "Processing $file"
-          python3 fix_python_errors.py "$file" || exit 1
+          python3 fix_python_errors.py "$file"
+          if [ $? -ne 0 ]; then
+            echo "Error processing $file"
+            exit 1
+          fi
         done
 
   post_build:
@@ -28,11 +37,15 @@ phases:
       - echo "Python files have been checked and fixed"
       - |
         if [ -n "$(git status --porcelain)" ]; then
-          git config --global user.name "AWS CodeBuild"
-          git config --global user.email "codebuild@example.com"
+          echo "Changes detected, committing fixes..."
           git add .
           git commit -m "Auto-fix Python errors using Claude 3.5"
-          git push origin HEAD:dev
+          git push origin HEAD:dev || {
+            echo "Failed to push changes. Fetching latest changes and retrying..."
+            git fetch origin
+            git rebase origin/dev
+            git push origin HEAD:dev
+          }
         else
           echo "No changes to commit"
         fi 

@@ -6,7 +6,13 @@ import subprocess
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger(__name__)
 
 def run_script(script_path):
@@ -15,6 +21,10 @@ def run_script(script_path):
     """
     logger.debug(f"Attempting to run script: {script_path}")
     try:
+        logger.debug(f"Current working directory: {os.getcwd()}")
+        logger.debug(f"Script absolute path: {os.path.abspath(script_path)}")
+        logger.debug(f"Python executable: {sys.executable}")
+        
         result = subprocess.run(
             [sys.executable, script_path],
             capture_output=True,
@@ -27,7 +37,7 @@ def run_script(script_path):
             logger.debug(f"Script stdout: {result.stdout}")
         return result.returncode == 0, result.stderr if result.returncode != 0 else result.stdout
     except Exception as e:
-        logger.error(f"Error running script: {e}")
+        logger.error(f"Error running script: {e}", exc_info=True)
         return False, str(e)
 
 def fix_code_with_claude(code, error_message):
@@ -36,9 +46,11 @@ def fix_code_with_claude(code, error_message):
     """
     logger.debug("Initializing Bedrock client")
     try:
+        region = os.environ.get('AWS_REGION', 'us-east-1')
+        logger.debug(f"Using AWS region: {region}")
         bedrock = boto3.client(
             service_name='bedrock-runtime',
-            region_name=os.environ.get('AWS_REGION', 'us-east-1')
+            region_name=region
         )
         
         logger.debug("Preparing prompt for Claude")
@@ -91,6 +103,10 @@ def fix_code_with_claude(code, error_message):
 
 def main():
     logger.info("Starting Python error fixer")
+    logger.debug(f"Arguments: {sys.argv}")
+    logger.debug(f"Current working directory: {os.getcwd()}")
+    logger.debug(f"Environment variables: {dict(os.environ)}")
+    
     if len(sys.argv) != 2:
         logger.error("Usage: python fix_python_errors.py <script_path>")
         sys.exit(1)
@@ -106,9 +122,9 @@ def main():
     try:
         with open(script_path, 'r') as f:
             original_code = f.read()
-        logger.debug(f"Read original code from {script_path}")
+        logger.debug(f"Read original code from {script_path}:\n{original_code}")
     except Exception as e:
-        logger.error(f"Error reading file: {e}")
+        logger.error(f"Error reading file: {e}", exc_info=True)
         sys.exit(1)
     
     # Try to run the script
@@ -124,6 +140,7 @@ def main():
     try:
         # Get fixed code from Claude
         fixed_code = fix_code_with_claude(original_code, result)
+        logger.debug(f"Fixed code:\n{fixed_code}")
         
         # Write the fixed code
         with open(script_path, 'w') as f:
