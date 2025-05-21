@@ -14,8 +14,8 @@ phases:
       - echo "Checking commit message to prevent build loops"
       - |
         COMMIT_MSG=$(git log -1 --pretty=%B)
-        if [[ "$COMMIT_MSG" == *"Auto-fix Python errors using Claude 3.5"* ]]; then
-          echo "Skipping build for auto-fix commit"
+        if [[ "$COMMIT_MSG" == *"Auto-fix"* ]] || [[ "$COMMIT_MSG" == *"auto-fix"* ]] || [[ "$COMMIT_MSG" == *"[skip-build]"* ]]; then
+          echo "Skipping build for auto-fix or skip-build commit"
           exit 0
         fi
 
@@ -23,7 +23,11 @@ phases:
     commands:
       - echo "Checking Python files for errors..."
       - |
-        for file in $(find . -type f -name "*.py"); do
+        for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
+          if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/.venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
+            echo "Skipping $file (excluded directory)"
+            continue
+          fi
           echo "Processing $file"
           if ! python3 fix_python_errors.py "$file"; then
             echo "Error processing $file"
@@ -38,7 +42,7 @@ phases:
         if [ -n "$(git status --porcelain)" ]; then
           echo "Changes detected, committing fixes..."
           git add .
-          git commit -m "Auto-fix Python errors using Claude 3.5"
+          git commit -m "Auto-fix: Python errors fixed [skip-build]"
           git push origin HEAD:dev || {
             echo "Failed to push changes. Fetching latest changes and retrying..."
             git fetch origin
