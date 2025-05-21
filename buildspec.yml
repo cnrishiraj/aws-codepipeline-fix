@@ -23,10 +23,9 @@ phases:
     commands:
       - echo "Checking Python files for errors..."
       - |
-        find . -name "*.py" | while read file; do
+        for file in $(find . -type f -name "*.py"); do
           echo "Processing $file"
-          python3 fix_python_errors.py "$file"
-          if [ $? -ne 0 ]; then
+          if ! python3 fix_python_errors.py "$file"; then
             echo "Error processing $file"
             exit 1
           fi
