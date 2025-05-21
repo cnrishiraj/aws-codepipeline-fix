@@ -15,6 +15,7 @@ phases:
       - echo ">>> Installing system & Python dependencies"
       - pip install --upgrade pip
       - pip install boto3 botocore
+      - apt-get update && apt-get install -y jq  # Install jq for JSON processing
       - git config --global user.name "AWS CodeBuild"
       - git config --global user.email "codebuild@example.com"
       # Configure git to use HTTPS with token
@@ -55,17 +56,50 @@ phases:
       - echo ">>> Build finished at $(date)"
       - |
         if [ -n "$(git status --porcelain)" ]; then
-          echo "Changes detected, committing fixes..."
+          echo "Changes detected, creating PR..."
+          
+          # Create a new branch for the fixes
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
+          
+          # Switch to new branch
+          git checkout -b $FIX_BRANCH
+          
+          # Commit changes
           git add .
           git commit -m "Auto-fix: Python errors fixed [skip-build]"
-          # Use explicit repository URL with token
+          
+          # Configure git with token
           REPO_URL="https://${GITHUB_TOKEN}@github.com/$(git config --get remote.origin.url | sed 's/https:\/\/github.com\///')"
-          git push "$REPO_URL" HEAD:${CODEBUILD_SOURCE_VERSION:-dev} || {
-            echo "Failed to push changes. Fetching latest changes and retrying..."
-            git fetch "$REPO_URL"
-            git rebase origin/${CODEBUILD_SOURCE_VERSION:-dev}
-            git push "$REPO_URL" HEAD:${CODEBUILD_SOURCE_VERSION:-dev}
-          }
+          REPO_NAME=$(git config --get remote.origin.url | sed 's/.*github.com[:/]//' | sed 's/\.git$//')
+          
+          # Push the fix branch
+          git push "$REPO_URL" $FIX_BRANCH
+          
+          # Create Pull Request using GitHub API
+          PR_RESPONSE=$(curl -X POST \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${REPO_NAME}/pulls" \
+            -d "{
+              \"title\": \"Fix Python Errors (${TIMESTAMP})\",
+              \"body\": \"Automated PR to fix Python errors using Claude 3.5\",
+              \"head\": \"${FIX_BRANCH}\",
+              \"base\": \"main\"
+            }")
+          
+          # Extract PR number and URL
+          PR_NUMBER=$(echo $PR_RESPONSE | jq -r .number)
+          PR_URL=$(echo $PR_RESPONSE | jq -r .html_url)
+          
+          if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
+            echo "Successfully created PR #${PR_NUMBER}"
+            echo "PR URL: ${PR_URL}"
+          else
+            echo "Failed to create PR. Response:"
+            echo "$PR_RESPONSE"
+            exit 1
+          fi
         else
           echo "No changes to commit"
         fi
@@ -76,4 +110,4 @@ artifacts:
   exclude-paths:
     - "**/__pycache__/**"
     - "**/venv/**"
-    - "**/.venv/**" 
+    - "**/.venv/**"

@@ -3,8 +3,13 @@ name: Python Error Fixer
 on:
   push:
     branches: [ dev ]
+    paths:
+      - '**.py'  # Only trigger on Python file changes
   pull_request:
     branches: [ main ]
+    paths:
+      - '**.py'  # Only trigger on Python file changes
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
   fix-python:
@@ -17,6 +22,7 @@ jobs:
     - uses: actions/checkout@v3
       with:
         fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
     
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
@@ -28,6 +34,7 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
+        cache: 'pip'  # Enable pip caching
     
     - name: Install dependencies
       run: |
@@ -48,45 +55,72 @@ jobs:
     
     - name: Fix Python errors
       if: steps.check_commit.outputs.skip != 'true'
+      id: fix_errors
       run: |
+        FIXED_FILES=()
         for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
           if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/.venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
             echo "Skipping $file (excluded directory)"
             continue
           fi
           echo "Processing $file"
-          python3 fix_python_errors.py "$file" || {
+          if python3 fix_python_errors.py "$file"; then
+            FIXED_FILES+=("$file")
+          else
             echo "Error processing $file"
             exit 1
-          }
+          fi
         done
+        if [ ${#FIXED_FILES[@]} -gt 0 ]; then
+          echo "fixed_files=${FIXED_FILES[*]}" >> $GITHUB_OUTPUT
+          echo "has_fixes=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_fixes=false" >> $GITHUB_OUTPUT
+        fi
     
     - name: Create Pull Request
-      if: steps.check_commit.outputs.skip != 'true' && success()
+      if: steps.check_commit.outputs.skip != 'true' && steps.fix_errors.outputs.has_fixes == 'true'
       run: |
-        if [ -n "$(git status --porcelain)" ]; then
-          # Create a new branch for the fixes
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
-          
-          # Configure git
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          
-          # Create and push branch
-          git checkout -b $FIX_BRANCH
-          git add .
-          git commit -m "Auto-fix: Python errors fixed [skip-build]"
-          git push origin $FIX_BRANCH
-          
-          # Create PR using gh cli
-          gh pr create \
-            --title "Fix Python Errors (${TIMESTAMP})" \
-            --body "Automated PR to fix Python errors using Claude 3.5" \
-            --base main \
-            --head $FIX_BRANCH
-        else
-          echo "No changes to commit"
-        fi
+        # Create a new branch for the fixes
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
+        
+        # Configure git
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+        # Create and push branch
+        git checkout -b $FIX_BRANCH
+        git add .
+        
+        # Create detailed commit message
+        COMMIT_MSG="Auto-fix: Python errors fixed [skip-build]\n\nFixed files:\n"
+        for file in ${{ steps.fix_errors.outputs.fixed_files }}; do
+          COMMIT_MSG+="- $file\n"
+        done
+        
+        git commit -m "$COMMIT_MSG"
+        git push origin $FIX_BRANCH
+        
+        # Create PR with detailed description
+        gh pr create \
+          --title "Fix Python Errors (${TIMESTAMP})" \
+          --body "Automated PR to fix Python errors using Claude 3.5\n\nFixed files:\n$(echo "${{ steps.fix_errors.outputs.fixed_files }}" | sed 's/ /\n- /g')" \
+          --base main \
+          --head $FIX_BRANCH
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Report Status
+      if: always()
+      run: |
+        if [[ "${{ steps.check_commit.outputs.skip }}" == "true" ]]; then
+          echo "Build skipped - Auto-fix commit detected"
+        elif [[ "${{ steps.fix_errors.outputs.has_fixes }}" == "true" ]]; then
+          echo "Successfully fixed Python errors and created PR"
+        elif [[ "${{ steps.fix_errors.result }}" == "success" ]]; then
+          echo "No Python errors found"
+        else
+          echo "Error fixing Python files"
+          exit 1
+        fi
