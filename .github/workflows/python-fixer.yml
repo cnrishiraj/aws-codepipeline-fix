@@ -57,23 +57,51 @@ jobs:
       if: steps.check_commit.outputs.skip != 'true'
       id: fix_errors
       run: |
+        # Create a directory to store diffs
+        mkdir -p /tmp/diffs
+        
         FIXED_FILES=()
+        CHANGES_DESCRIPTION=""
+        
         for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
           if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/.venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
             echo "Skipping $file (excluded directory)"
             continue
           fi
+          
           echo "Processing $file"
+          
+          # Store original content
+          cp "$file" "/tmp/diffs/$(basename $file).original"
+          
           if python3 fix_python_errors.py "$file"; then
-            FIXED_FILES+=("$file")
+            # Generate diff if file was modified
+            if ! cmp -s "$file" "/tmp/diffs/$(basename $file).original"; then
+              FIXED_FILES+=("$file")
+              
+              # Generate detailed diff
+              diff_output=$(diff -u "/tmp/diffs/$(basename $file).original" "$file" | tail -n +3)
+              
+              # Store diff details
+              echo "### Changes in $file:" >> /tmp/diffs/changes.md
+              echo '```diff' >> /tmp/diffs/changes.md
+              echo "$diff_output" >> /tmp/diffs/changes.md
+              echo '```' >> /tmp/diffs/changes.md
+              echo "" >> /tmp/diffs/changes.md
+            fi
           else
             echo "Error processing $file"
             exit 1
           fi
         done
+        
         if [ ${#FIXED_FILES[@]} -gt 0 ]; then
+          # Save the list of fixed files
           echo "fixed_files=${FIXED_FILES[*]}" >> $GITHUB_OUTPUT
           echo "has_fixes=true" >> $GITHUB_OUTPUT
+          
+          # Save the changes description to a file that can be read in the next step
+          cat /tmp/diffs/changes.md > /tmp/diffs/pr_description.md
         else
           echo "has_fixes=false" >> $GITHUB_OUTPUT
         fi
@@ -102,10 +130,21 @@ jobs:
         git commit -m "$COMMIT_MSG"
         git push origin $FIX_BRANCH
         
+        # Read the detailed changes from the file
+        PR_DESCRIPTION="# Python Error Fixes\n\n"
+        PR_DESCRIPTION+="Automated PR to fix Python errors using Claude 3.5\n\n"
+        PR_DESCRIPTION+="## Summary of Changes\n\n"
+        PR_DESCRIPTION+="The following files were fixed:\n"
+        for file in ${{ steps.fix_errors.outputs.fixed_files }}; do
+          PR_DESCRIPTION+="- \`$file\`\n"
+        done
+        PR_DESCRIPTION+="\n## Detailed Changes\n\n"
+        PR_DESCRIPTION+="$(cat /tmp/diffs/pr_description.md)"
+        
         # Create PR with detailed description
         gh pr create \
           --title "Fix Python Errors (${TIMESTAMP})" \
-          --body "Automated PR to fix Python errors using Claude 3.5\n\nFixed files:\n$(echo "${{ steps.fix_errors.outputs.fixed_files }}" | sed 's/ /\n- /g')" \
+          --body "$PR_DESCRIPTION" \
           --base main \
           --head $FIX_BRANCH
       env:
