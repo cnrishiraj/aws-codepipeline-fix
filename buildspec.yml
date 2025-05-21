@@ -1,108 +1,40 @@
 version: 0.2
 
-env:
-  variables:
-    MODEL_ID: "anthropic.claude-3-sonnet-20240229-v1:0"
-    AWS_REGION: "us-east-1"
-  parameter-store:
-    GITHUB_TOKEN: "/codebuild/github-token"  # Store token in Parameter Store
-
 phases:
   install:
     runtime-versions:
       python: 3.9
     commands:
-      - echo ">>> Installing system & Python dependencies"
-      - pip install --upgrade pip
       - pip install boto3 botocore
-      - apt-get update && apt-get install -y jq  # Install jq for JSON processing
-      - git config --global user.name "AWS CodeBuild"
-      - git config --global user.email "codebuild@example.com"
-      # Configure git to use HTTPS with token
-      - git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-
-  pre_build:
-    commands:
-      - echo ">>> Installing project requirements"
-      - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - echo ">>> Verifying AWS identity"
-      - aws sts get-caller-identity
-      - echo ">>> Checking commit message to prevent build loops"
-      - |
-        COMMIT_MSG=$(git log -1 --pretty=%B)
-        if [[ "$COMMIT_MSG" == *"Auto-fix"* ]] || [[ "$COMMIT_MSG" == *"auto-fix"* ]] || [[ "$COMMIT_MSG" == *"[skip-build]"* ]]; then
-          echo "Skipping build for auto-fix or skip-build commit"
-          exit 0
-        fi
 
   build:
     commands:
-      - echo ">>> Checking Python files for errors..."
+      - echo "=== Starting Python Error Fixes ==="
       - |
         for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
-          if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/.venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
-            echo "Skipping $file (excluded directory)"
-            continue
-          fi
-          echo "Processing $file"
-          python3 fix_python_errors.py "$file" || {
-            echo "Error processing $file"
-            exit 1
-          }
-        done
-
-  post_build:
-    commands:
-      - echo ">>> Build finished at $(date)"
-      - |
-        if [ -n "$(git status --porcelain)" ]; then
-          echo "Changes detected, creating PR..."
+          echo "\nChecking file: $file"
+          echo "------------------------"
           
-          # Create a new branch for the fixes
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
+          # Save original content
+          cp "$file" "$file.backup"
           
-          # Switch to new branch
-          git checkout -b $FIX_BRANCH
-          
-          # Commit changes
-          git add .
-          git commit -m "Auto-fix: Python errors fixed [skip-build]"
-          
-          # Configure git with token
-          REPO_URL="https://${GITHUB_TOKEN}@github.com/$(git config --get remote.origin.url | sed 's/https:\/\/github.com\///')"
-          REPO_NAME=$(git config --get remote.origin.url | sed 's/.*github.com[:/]//' | sed 's/\.git$//')
-          
-          # Push the fix branch
-          git push "$REPO_URL" $FIX_BRANCH
-          
-          # Create Pull Request using GitHub API
-          PR_RESPONSE=$(curl -X POST \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${REPO_NAME}/pulls" \
-            -d "{
-              \"title\": \"Fix Python Errors (${TIMESTAMP})\",
-              \"body\": \"Automated PR to fix Python errors using Claude 3.5\",
-              \"head\": \"${FIX_BRANCH}\",
-              \"base\": \"main\"
-            }")
-          
-          # Extract PR number and URL
-          PR_NUMBER=$(echo $PR_RESPONSE | jq -r .number)
-          PR_URL=$(echo $PR_RESPONSE | jq -r .html_url)
-          
-          if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
-            echo "Successfully created PR #${PR_NUMBER}"
-            echo "PR URL: ${PR_URL}"
+          # Try to fix the file
+          if python3 fix_python_errors.py "$file"; then
+            # Show changes if any were made
+            if ! cmp -s "$file" "$file.backup"; then
+              echo "Changes made to $file:"
+              diff "$file.backup" "$file"
+            else
+              echo "No changes needed in $file"
+            fi
           else
-            echo "Failed to create PR. Response:"
-            echo "$PR_RESPONSE"
-            exit 1
+            echo "Error while processing $file"
           fi
-        else
-          echo "No changes to commit"
-        fi
+          
+          # Clean up backup
+          rm "$file.backup"
+        done
+      - echo "=== Python Error Fixes Complete ==="
 
 artifacts:
   files:
@@ -110,4 +42,3 @@ artifacts:
   exclude-paths:
     - "**/__pycache__/**"
     - "**/venv/**"
-    - "**/.venv/**"

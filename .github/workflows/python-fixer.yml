@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      id-token: write
       
     steps:
     - uses: actions/checkout@v3
@@ -29,6 +30,7 @@ jobs:
       with:
         role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
         aws-region: us-east-1
+        audience: sts.amazonaws.com
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -106,31 +108,50 @@ jobs:
           echo "has_fixes=false" >> $GITHUB_OUTPUT
         fi
     
-    - name: Create Pull Request
+    - name: Update Dev Branch
       if: steps.check_commit.outputs.skip != 'true' && steps.fix_errors.outputs.has_fixes == 'true'
       run: |
-        # Create a new branch for the fixes
-        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-        FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
-        
         # Configure git
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         
-        # Create and push branch
-        git checkout -b $FIX_BRANCH
-        git add .
+        # First, update dev branch with the fixes
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
         
-        # Create detailed commit message
+        # Create commit message with detailed changes
         COMMIT_MSG="Auto-fix: Python errors fixed [skip-build]\n\nFixed files:\n"
         for file in ${{ steps.fix_errors.outputs.fixed_files }}; do
           COMMIT_MSG+="- $file\n"
         done
+        COMMIT_MSG+="\nDetailed changes:\n"
+        COMMIT_MSG+="$(cat /tmp/diffs/pr_description.md)"
         
+        # Make sure we're on dev branch
+        git checkout dev
+        git pull origin dev
+        
+        # Apply and commit changes
+        git add .
         git commit -m "$COMMIT_MSG"
+        git push origin dev
+        
+        # Store the commit SHA for PR creation
+        echo "dev_commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+    
+    - name: Create Pull Request
+      if: steps.check_commit.outputs.skip != 'true' && steps.fix_errors.outputs.has_fixes == 'true'
+      run: |
+        # Create a new branch for the PR
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
+        
+        # Create branch from the updated dev branch
+        git checkout -b $FIX_BRANCH
+        
+        # Push the branch
         git push origin $FIX_BRANCH
         
-        # Read the detailed changes from the file
+        # Create PR description
         PR_DESCRIPTION="# Python Error Fixes\n\n"
         PR_DESCRIPTION+="Automated PR to fix Python errors using Claude 3.5\n\n"
         PR_DESCRIPTION+="## Summary of Changes\n\n"
@@ -140,8 +161,9 @@ jobs:
         done
         PR_DESCRIPTION+="\n## Detailed Changes\n\n"
         PR_DESCRIPTION+="$(cat /tmp/diffs/pr_description.md)"
+        PR_DESCRIPTION+="\n\nNote: These changes have been automatically committed to the dev branch as well."
         
-        # Create PR with detailed description
+        # Create PR
         gh pr create \
           --title "Fix Python Errors (${TIMESTAMP})" \
           --body "$PR_DESCRIPTION" \
@@ -154,12 +176,12 @@ jobs:
       if: always()
       run: |
         if [[ "${{ steps.check_commit.outputs.skip }}" == "true" ]]; then
-          echo "Build skipped - Auto-fix commit detected"
+          echo "✅ Build skipped - Auto-fix commit detected"
         elif [[ "${{ steps.fix_errors.outputs.has_fixes }}" == "true" ]]; then
-          echo "Successfully fixed Python errors and created PR"
+          echo "✅ Successfully fixed Python errors, updated dev branch, and created PR"
         elif [[ "${{ steps.fix_errors.result }}" == "success" ]]; then
-          echo "No Python errors found"
+          echo "✅ No Python errors found"
         else
-          echo "Error fixing Python files"
+          echo "❌ Error fixing Python files"
           exit 1
         fi
