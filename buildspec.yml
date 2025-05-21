@@ -4,6 +4,8 @@ env:
   variables:
     MODEL_ID: "anthropic.claude-3-sonnet-20240229-v1:0"
     AWS_REGION: "us-east-1"
+  parameter-store:
+    GITHUB_TOKEN: "/codebuild/github-token"  # Store token in Parameter Store
 
 phases:
   install:
@@ -15,6 +17,8 @@ phases:
       - pip install boto3 botocore
       - git config --global user.name "AWS CodeBuild"
       - git config --global user.email "codebuild@example.com"
+      # Configure git to use HTTPS with token
+      - git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
   pre_build:
     commands:
@@ -54,11 +58,13 @@ phases:
           echo "Changes detected, committing fixes..."
           git add .
           git commit -m "Auto-fix: Python errors fixed [skip-build]"
-          git push origin HEAD:${CODEBUILD_SOURCE_VERSION:-dev} || {
+          # Use explicit repository URL with token
+          REPO_URL="https://${GITHUB_TOKEN}@github.com/$(git config --get remote.origin.url | sed 's/https:\/\/github.com\///')"
+          git push "$REPO_URL" HEAD:${CODEBUILD_SOURCE_VERSION:-dev} || {
             echo "Failed to push changes. Fetching latest changes and retrying..."
-            git fetch origin
+            git fetch "$REPO_URL"
             git rebase origin/${CODEBUILD_SOURCE_VERSION:-dev}
-            git push origin HEAD:${CODEBUILD_SOURCE_VERSION:-dev}
+            git push "$REPO_URL" HEAD:${CODEBUILD_SOURCE_VERSION:-dev}
           }
         else
           echo "No changes to commit"
