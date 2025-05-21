@@ -13,7 +13,7 @@ phases:
       - |
         for file in $(find . -name "*.py"); do
           echo "Processing $file"
-          python fix_python_errors.py "$file"
+          python3 fix_python_errors.py "$file" || exit 1
         done
 
   post_build:
