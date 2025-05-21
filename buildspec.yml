@@ -9,6 +9,13 @@ phases:
 
   build:
     commands:
+      - echo "Checking commit message to prevent build loops"
+      - |
+        COMMIT_MSG=$(git log -1 --pretty=%B)
+        if [[ "$COMMIT_MSG" == *"Auto-fix Python errors using Claude 3.5"* ]]; then
+          echo "Skipping build for auto-fix commit"
+          exit 0
+        fi
       - echo "Checking Python files for errors..."
       - |
         for file in $(find . -name "*.py"); do
