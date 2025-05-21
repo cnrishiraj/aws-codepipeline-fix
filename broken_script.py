@@ -5,7 +5,7 @@ def calculate_sum(a, b):
 
 def greet(name):
     # This function has syntax and logic errors
-    print("Hello, " + name  # Missing parenthesis
+    p rint("Hello, " + name  # Missing parenthesis
     return name.upper  # Missing parentheses for method call
 
 def divide(x, y)  # Missing colon
