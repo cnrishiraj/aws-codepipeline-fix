@@ -1,85 +1,40 @@
 version: 0.2
 
-env:
-  variables:
-    MODEL_ID: "anthropic.claude-3-sonnet-20240229-v1:0"
-    AWS_REGION: "us-east-1"
-  parameter-store:
-    GITHUB_TOKEN: "/codebuild/github-token"
-
 phases:
   install:
     runtime-versions:
       python: 3.9
     commands:
-      - pip install --upgrade pip
       - pip install boto3 botocore
-      - apt-get update && apt-get install -y jq
-      - git config --global user.name "AWS CodeBuild"
-      - git config --global user.email "codebuild@example.com"
-
-  pre_build:
-    commands:
-      - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - aws sts get-caller-identity
-      - |
-        COMMIT_MSG=$(git log -1 --pretty=%B)
-        if [[ "$COMMIT_MSG" == *"Auto-fix"* ]] || [[ "$COMMIT_MSG" == *"[skip-build]"* ]]; then
-          echo "Skipping build for auto-fix commit"
-          exit 0
-        fi
 
   build:
     commands:
-      - mkdir -p /tmp/diffs
+      - echo "=== Starting Python Error Fixes ==="
       - |
         for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
-          if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
-            continue
+          echo "\nChecking file: $file"
+          echo "------------------------"
+          
+          # Save original content
+          cp "$file" "$file.backup"
+          
+          # Try to fix the file
+          if python3 fix_python_errors.py "$file"; then
+            # Show changes if any were made
+            if ! cmp -s "$file" "$file.backup"; then
+              echo "Changes made to $file:"
+              diff "$file.backup" "$file"
+            else
+              echo "No changes needed in $file"
+            fi
+          else
+            echo "Error while processing $file"
           fi
-          echo "Processing $file"
-          cp "$file" "/tmp/diffs/$(basename $file).original"
-          python3 fix_python_errors.py "$file" || exit 1
-          if ! cmp -s "$file" "/tmp/diffs/$(basename $file).original"; then
-            echo "### Changes in $file:" >> /tmp/diffs/changes.md
-            diff -u "/tmp/diffs/$(basename $file).original" "$file" | tail -n +3 >> /tmp/diffs/changes.md
-          fi
+          
+          # Clean up backup
+          rm "$file.backup"
         done
-
-  post_build:
-    commands:
-      - |
-        if [ -n "$(git status --porcelain)" ]; then
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          CHANGES=$(cat /tmp/diffs/changes.md)
-          
-          # Update dev branch
-          git fetch origin dev
-          git checkout dev
-          git pull origin dev
-          git add .
-          git commit -m "Auto-fix: Python errors fixed [skip-build]"
-          git push https://${GITHUB_TOKEN}@github.com/cnrishiraj/aws-codepipeline-fix.git dev
-          
-          # Create PR branch
-          FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
-          git checkout -b $FIX_BRANCH
-          git push https://${GITHUB_TOKEN}@github.com/cnrishiraj/aws-codepipeline-fix.git $FIX_BRANCH
-          
-          # Create PR
-          curl -X POST \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/cnrishiraj/aws-codepipeline-fix/pulls" \
-            -d "{
-              \"title\": \"Fix Python Errors (${TIMESTAMP})\",
-              \"body\": \"Automated fixes:\\n\\n\`\`\`diff\\n${CHANGES}\\n\`\`\`\",
-              \"head\": \"${FIX_BRANCH}\",
-              \"base\": \"main\"
-            }"
-        else
-          echo "No changes to commit"
-        fi
+      - echo "=== Python Error Fixes Complete ==="
 
 artifacts:
   files:
