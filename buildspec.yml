@@ -5,159 +5,78 @@ env:
     MODEL_ID: "anthropic.claude-3-sonnet-20240229-v1:0"
     AWS_REGION: "us-east-1"
   parameter-store:
-    GITHUB_TOKEN: "/codebuild/github-token"  # Store token in Parameter Store
+    GITHUB_TOKEN: "/codebuild/github-token"
 
 phases:
   install:
     runtime-versions:
       python: 3.9
     commands:
-      - echo ">>> Installing system & Python dependencies"
       - pip install --upgrade pip
       - pip install boto3 botocore
-      - apt-get update && apt-get install -y jq  # Install jq for JSON processing
+      - apt-get update && apt-get install -y jq
       - git config --global user.name "AWS CodeBuild"
       - git config --global user.email "codebuild@example.com"
-      # Configure git to use HTTPS with token
-      - git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
   pre_build:
     commands:
-      - echo ">>> Installing project requirements"
       - if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - echo ">>> Verifying AWS identity"
       - aws sts get-caller-identity
-      - echo ">>> Checking commit message to prevent build loops"
       - |
         COMMIT_MSG=$(git log -1 --pretty=%B)
-        if [[ "$COMMIT_MSG" == *"Auto-fix"* ]] || [[ "$COMMIT_MSG" == *"auto-fix"* ]] || [[ "$COMMIT_MSG" == *"[skip-build]"* ]]; then
-          echo "Skipping build for auto-fix or skip-build commit"
+        if [[ "$COMMIT_MSG" == *"Auto-fix"* ]] || [[ "$COMMIT_MSG" == *"[skip-build]"* ]]; then
+          echo "Skipping build for auto-fix commit"
           exit 0
         fi
 
   build:
     commands:
-      - echo ">>> Checking Python files for errors..."
+      - mkdir -p /tmp/diffs
       - |
-        # Create directory for storing diffs
-        mkdir -p /tmp/diffs
-        
-        # Initialize arrays for storing fixed files and their diffs
-        FIXED_FILES=()
-        
         for file in $(find . -type f -name "*.py" ! -name "fix_python_errors.py"); do
-          if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/.venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
-            echo "Skipping $file (excluded directory)"
+          if [[ "$file" == *"/venv/"* ]] || [[ "$file" == *"/__pycache__/"* ]]; then
             continue
           fi
-          
           echo "Processing $file"
-          # Store original content for diff
           cp "$file" "/tmp/diffs/$(basename $file).original"
-          
-          if python3 fix_python_errors.py "$file"; then
-            # Check if file was actually modified
-            if ! cmp -s "$file" "/tmp/diffs/$(basename $file).original"; then
-              FIXED_FILES+=("$file")
-              
-              # Generate and store diff
-              diff_output=$(diff -u "/tmp/diffs/$(basename $file).original" "$file" | tail -n +3)
-              echo "### Changes in $file:" >> /tmp/diffs/changes.md
-              echo '```diff' >> /tmp/diffs/changes.md
-              echo "$diff_output" >> /tmp/diffs/changes.md
-              echo '```' >> /tmp/diffs/changes.md
-              echo "" >> /tmp/diffs/changes.md
-            fi
-          else
-            echo "Error processing $file"
-            exit 1
+          python3 fix_python_errors.py "$file" || exit 1
+          if ! cmp -s "$file" "/tmp/diffs/$(basename $file).original"; then
+            echo "### Changes in $file:" >> /tmp/diffs/changes.md
+            diff -u "/tmp/diffs/$(basename $file).original" "$file" | tail -n +3 >> /tmp/diffs/changes.md
           fi
         done
 
   post_build:
     commands:
-      - echo ">>> Build finished at $(date)"
       - |
         if [ -n "$(git status --porcelain)" ]; then
-          echo "Changes detected, updating dev branch and creating PR..."
-          
-          # Store the changes description
-          CHANGES_DESCRIPTION=$(cat /tmp/diffs/changes.md)
-          
-          # First, update dev branch
-          echo ">>> Updating dev branch with fixes..."
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          CHANGES=$(cat /tmp/diffs/changes.md)
           
-          # Make sure we're on dev branch and it's up to date
+          # Update dev branch
           git fetch origin dev
           git checkout dev
           git pull origin dev
-          
-          # Create detailed commit message for dev branch
-          DEV_COMMIT_MSG="Auto-fix: Python errors fixed [skip-build]
-
-Fixed files:
-$(printf '%s\n' "${FIXED_FILES[@]}" | sed 's/^/- /')
-
-Detailed changes:
-$CHANGES_DESCRIPTION"
-          
-          # Commit and push to dev
           git add .
-          git commit -m "$DEV_COMMIT_MSG"
-          git push origin dev
+          git commit -m "Auto-fix: Python errors fixed [skip-build]"
+          git push https://${GITHUB_TOKEN}@github.com/cnrishiraj/aws-codepipeline-fix.git dev
           
-          # Now create a branch for the PR
-          echo ">>> Creating PR branch..."
+          # Create PR branch
           FIX_BRANCH="fix/python-errors-${TIMESTAMP}"
           git checkout -b $FIX_BRANCH
+          git push https://${GITHUB_TOKEN}@github.com/cnrishiraj/aws-codepipeline-fix.git $FIX_BRANCH
           
-          # Push the fix branch
-          git push origin $FIX_BRANCH
-          
-          # Get repository name for API calls
-          REPO_NAME=$(git config --get remote.origin.url | sed 's/.*github.com[:/]//' | sed 's/\.git$//')
-          
-          # Create Pull Request using GitHub API
-          echo ">>> Creating Pull Request..."
-          PR_DESCRIPTION="# Python Error Fixes
-
-Automated PR to fix Python errors using Claude 3.5
-
-## Summary of Changes
-
-The following files were fixed:
-$(printf '%s\n' "${FIXED_FILES[@]}" | sed 's/^/- `/' | sed 's/$/`/')
-
-## Detailed Changes
-
-$CHANGES_DESCRIPTION
-
-Note: These changes have been automatically committed to the dev branch as well."
-          
-          PR_RESPONSE=$(curl -X POST \
+          # Create PR
+          curl -X POST \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${REPO_NAME}/pulls" \
+            "https://api.github.com/repos/cnrishiraj/aws-codepipeline-fix/pulls" \
             -d "{
               \"title\": \"Fix Python Errors (${TIMESTAMP})\",
-              \"body\": \"$PR_DESCRIPTION\",
+              \"body\": \"Automated fixes:\\n\\n\`\`\`diff\\n${CHANGES}\\n\`\`\`\",
               \"head\": \"${FIX_BRANCH}\",
               \"base\": \"main\"
-            }")
-          
-          # Extract PR number and URL
-          PR_NUMBER=$(echo $PR_RESPONSE | jq -r .number)
-          PR_URL=$(echo $PR_RESPONSE | jq -r .html_url)
-          
-          if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
-            echo "✅ Successfully created PR #${PR_NUMBER}"
-            echo "PR URL: ${PR_URL}"
-          else
-            echo "❌ Failed to create PR. Response:"
-            echo "$PR_RESPONSE"
-            exit 1
-          fi
+            }"
         else
           echo "No changes to commit"
         fi
@@ -168,4 +87,3 @@ artifacts:
   exclude-paths:
     - "**/__pycache__/**"
     - "**/venv/**"
-    - "**/.venv/**"
