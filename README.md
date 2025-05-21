@@ -12,7 +12,16 @@ Automatically fixes Python errors in your code using AWS CodePipeline and Claude
 
 1. Push this code to your GitHub repository
 2. Set up AWS CodePipeline with:
-   - Source: Your GitHub repository
+   - Source: Your GitHub repository (dev branch)
    - Build: AWS CodeBuild using the included buildspec.yml
 
-The pipeline will automatically fix any Python errors in your code using Claude 3.5 when you push changes.
+## Workflow
+
+1. Push your Python code to the `dev` branch
+2. CodePipeline will automatically:
+   - Detect the push to dev
+   - Check all Python files for errors
+   - Use Claude 3.5 to fix any errors found
+   - Commit the fixes back to the dev branch
+
+This allows you to test and fix code in the dev branch before merging to main.

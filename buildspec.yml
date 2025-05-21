@@ -5,7 +5,7 @@ phases:
     runtime-versions:
       python: 3.9
     commands:
-      - pip install -r requirements.txt
+      - pip install boto3 botocore
 
   build:
     commands:
@@ -25,7 +25,7 @@ phases:
           git config --global user.email "codebuild@example.com"
           git add .
           git commit -m "Auto-fix Python errors using Claude 3.5"
-          git push origin HEAD:main
+          git push origin HEAD:dev
         else
           echo "No changes to commit"
         fi 
