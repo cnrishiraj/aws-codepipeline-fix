@@ -27,6 +27,7 @@ jobs:
     
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
+      continue-on-error: true
       with:
         role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
         aws-region: us-east-1
