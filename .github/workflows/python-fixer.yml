@@ -108,6 +108,9 @@ jobs:
         else
           echo "has_fixes=false" >> $GITHUB_OUTPUT
         fi
+        
+        # Always set success indicator
+        echo "completed_successfully=true" >> $GITHUB_OUTPUT
     
     - name: Update Dev Branch
       if: steps.check_commit.outputs.skip != 'true' && steps.fix_errors.outputs.has_fixes == 'true'
@@ -180,7 +183,7 @@ jobs:
           echo "✅ Build skipped - Auto-fix commit detected"
         elif [[ "${{ steps.fix_errors.outputs.has_fixes }}" == "true" ]]; then
           echo "✅ Successfully fixed Python errors, updated dev branch, and created PR"
-        elif [[ "${{ steps.fix_errors.result }}" == "success" ]]; then
+        elif [[ "${{ steps.fix_errors.outputs.completed_successfully }}" == "true" ]]; then
           echo "✅ No Python errors found"
         else
           echo "❌ Error fixing Python files"
